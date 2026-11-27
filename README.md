@@ -129,7 +129,9 @@ only to rehearse the failure path:
 
 ```powershell
 pwsh -NoProfile -File verify/verify-signature.ps1 -File samples/tampered/sample-tampered.ps1 -KeyJson root-public.json
-# -> FAIL BODY_DIGEST_MISMATCH ...
+# -> FAIL KEY_ID_MISMATCH ... (the placeholder all-zero key-id matches no real
+#    key; if you verify against a key JSON whose key-id matches the block,
+#    the extra body line yields FAIL BODY_DIGEST_MISMATCH instead)
 ```
 
 ## Public key

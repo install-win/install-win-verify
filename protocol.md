@@ -29,7 +29,8 @@ recorded digest — is what makes that equality hold.
 
 ## 2. The Signature Block
 
-Each signed script ends with an 8-line block appended to the body:
+Each signed script ends with a signature block appended to the body —
+a header line, seven fields, and a footer line (9 lines total):
 
 ```
 # --- install.win SIGNATURE ---
