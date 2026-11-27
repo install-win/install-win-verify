@@ -75,10 +75,7 @@ jobs:
         shell: bash
         run: |
           set -e
-          pwsh -NoProfile -File verify/verify-negatives.ps1 `
-            -ProbeFile signed-sample.ps1 `
-            -ProducerFile samples/producers/sample.ps1 `
-            -KeyJson test-pub.json | tee verify-negatives.out
+          pwsh -NoProfile -File verify/verify-negatives.ps1 -ProbeFile signed-sample.ps1 -ProducerFile samples/producers/sample.ps1 -KeyJson test-pub.json | tee verify-negatives.out
           grep -q "verify-negatives: all scenarios PASS" verify-negatives.out
           echo "negative suite: all five scenarios rejected with exact codes"
 
