@@ -1,0 +1,7 @@
+signed-sample.ps1
+sign-sample.cjs
+test-private.pem
+test-public.pem
+test-pub.json
+verify-positive.out
+verify-negatives.out
