@@ -1,0 +1,111 @@
+name: Self-verify
+
+on: [push, workflow_dispatch]
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate throwaway test key
+        shell: bash
+        run: |
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out test-private.pem
+          openssl rsa -in test-private.pem -pubout -out test-public.pem
+
+      - name: Sign sample with test key (digest = sha256(body || 0x00 || handle), RSA-PSS salt=32)
+        shell: bash
+        run: |
+          cat > sign-sample.cjs <<'EOF'
+          const fs = require("fs");
+          const crypto = require("crypto");
+          const priv = crypto.createPrivateKey(fs.readFileSync("test-private.pem", "utf8"));
+          const pub = crypto.createPublicKey(priv);
+          const spki = pub.export({ type: "spki", format: "der" });
+          const spkiSha256 = crypto.createHash("sha256").update(spki).digest("hex");
+          const keyId = spkiSha256.slice(0, 32);
+          const jwk = pub.export({ format: "jwk" });
+          fs.writeFileSync("test-pub.json", JSON.stringify({
+            keyId,
+            spkiSha256,
+            modulus: Buffer.from(jwk.n, "base64url").toString("base64"),
+            exponent: Buffer.from(jwk.e, "base64url").toString("base64"),
+          }, null, 2) + "\n");
+          const body = fs.readFileSync("samples/producers/sample.ps1");
+          const handle = "sample";
+          // Sign the canonical bytes themselves: node's crypto.sign hashes its
+          // input, so passing body||0x00||handle makes the applied hash exactly
+          // the recorded digest (RFC 8017 mHash semantics).
+          const input = Buffer.concat([body, Buffer.from([0x00]), Buffer.from(handle, "ascii")]);
+          const digest = crypto.createHash("sha256").update(input).digest();
+          const sig = crypto.sign("sha256", input, {
+            key: priv,
+            padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+            saltLength: 32,
+          });
+          const block = [
+            "# --- install.win SIGNATURE ---",
+            "# key-id: " + keyId,
+            "# alg: RSA-PSS/SHA-256/salt=32",
+            "# salt: 32",
+            "# handle: " + handle,
+            "# sha256: " + digest.toString("hex"),
+            "# signed-at: " + new Date().toISOString(),
+            "# signature: " + sig.toString("base64"),
+            "# --- END SIGNATURE ---",
+          ].join("\n") + "\n";
+          fs.writeFileSync("signed-sample.ps1", Buffer.concat([body, Buffer.from(block, "utf8")]));
+          console.log("[ci-sign] keyId:", keyId);
+          console.log("[ci-sign] sha256:", digest.toString("hex"));
+          console.log("[ci-sign] signed sample + test public key JSON written");
+          EOF
+          node sign-sample.cjs
+
+      - name: Positive case - verify-signature.ps1 must PASS
+        shell: bash
+        run: |
+          set -e
+          pwsh -NoProfile -File verify/verify-signature.ps1 -File signed-sample.ps1 -KeyJson test-pub.json | tee verify-positive.out
+          grep -qx "PASS sample" verify-positive.out
+          echo "positive case: PASS sample confirmed"
+
+      - name: Negative suite - five scenarios with exact failure codes
+        shell: bash
+        run: |
+          set -e
+          pwsh -NoProfile -File verify/verify-negatives.ps1 `
+            -ProbeFile signed-sample.ps1 `
+            -ProducerFile samples/producers/sample.ps1 `
+            -KeyJson test-pub.json | tee verify-negatives.out
+          grep -q "verify-negatives: all scenarios PASS" verify-negatives.out
+          echo "negative suite: all five scenarios rejected with exact codes"
+
+      - name: Anchor self-check - recompute verifier sha256 against ANCHORS.md
+        shell: bash
+        run: |
+          set -e
+          cd verify
+          status=0
+          for f in verify-signature.ps1 verify-negatives.ps1 verify-pipeline.sh; do
+            expected=$(grep -F "\`$f\`" ANCHORS.md | grep -oE '[0-9a-f]{64}')
+            actual=$(sha256sum "$f" | cut -d' ' -f1)
+            if [ "$expected" = "$actual" ]; then
+              echo "anchor OK: $f $actual"
+            else
+              echo "anchor MISMATCH: $f expected=$expected actual=$actual"
+              status=1
+            fi
+          done
+          exit $status
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          echo "Self-verify summary:"
+          echo "- positive case output:"
+          cat verify-positive.out 2>/dev/null || echo "  (missing)"
+          echo "- negative suite output:"
+          cat verify-negatives.out 2>/dev/null || echo "  (missing)"
